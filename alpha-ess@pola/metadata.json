@@ -1,0 +1,7 @@
+{
+  "uuid": "alpha-ess@pola",
+  "name": "Alpha ESS Solar",
+  "description": "Solar, battery and savings from an Alpha ESS system in the top bar.",
+  "shell-version": ["50"],
+  "version": 1
+}
