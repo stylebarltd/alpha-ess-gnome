@@ -1,3 +1,11 @@
 .alpha-ess-label { font-weight: bold; }
 .alpha-ess-key { color: #aaa; min-width: 9em; }
 .alpha-ess-val { font-weight: bold; }
+.alpha-ess-good { color: #57e389; }
+.alpha-ess-warn { color: #ffa348; }
+.alpha-ess-bad { color: #ff7b63; }
+.alpha-ess-sun-strong { color: #f6d32d; }
+.alpha-ess-sun-mid { color: #f9f06b; }
+.alpha-ess-sun-weak { color: #9a9996; }
+/* faint pill so neighbouring top-bar items read as separate groups */
+.alpha-ess-chip { background-color: rgba(255, 255, 255, 0.07); border-radius: 8px; padding: 0 8px; margin: 4px 0; }

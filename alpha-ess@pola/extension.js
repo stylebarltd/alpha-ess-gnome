@@ -17,20 +17,36 @@ const DEFAULTS = {
     importPrice: 4.2,   // cost per kWh bought from grid
     exportPrice: 2.2,   // credit per kWh sold to grid
     refreshSeconds: 60,
+    socLow: 35,         // battery % at or below this shows red (inverter switches to grid ~28%)
+    socHigh: 60,        // below this shows orange, from here green
+    loadLow: 1.5,       // house load in kW up to this shows green
+    loadHigh: 4,        // up to this orange, above red
+    pvLow: 3,           // solar kW below this shows the sun grey (20 kWp array)
+    pvHigh: 8,          // below this light yellow, from here full yellow
 };
 
 const fmtKw = w => `${(w / 1000).toFixed(2)} kW`;
 const fmtKwh = v => `${(v ?? 0).toFixed(1)} kWh`;
+const LEVELS = ['alpha-ess-good', 'alpha-ess-warn', 'alpha-ess-bad'];
+const SUN = ['alpha-ess-sun-strong', 'alpha-ess-sun-mid', 'alpha-ess-sun-weak'];
+const setLevel = (w, level, classes = LEVELS) => {
+    for (const c of classes) w.remove_style_class_name(c);
+    if (level != null) w.add_style_class_name(classes[level]);
+};
 
 const Indicator = GObject.registerClass(
 class Indicator extends PanelMenu.Button {
     _init() {
         super._init(0.5, 'Alpha ESS Solar');
-        const box = new St.BoxLayout({style_class: 'panel-status-menu-box'});
+        const box = new St.BoxLayout({style_class: 'panel-status-menu-box alpha-ess-chip'});
         this._icon = new St.Icon({icon_name: 'weather-clear-symbolic', style_class: 'system-status-icon'});
         box.add_child(this._icon);
         this._label = new St.Label({text: '…', y_align: Clutter.ActorAlign.CENTER, style_class: 'alpha-ess-label'});
         box.add_child(this._label);
+        this._sep = new St.Label({text: ' · ', visible: false, y_align: Clutter.ActorAlign.CENTER, style_class: 'alpha-ess-label'});
+        box.add_child(this._sep);
+        this._soc = new St.Label({text: '', y_align: Clutter.ActorAlign.CENTER, style_class: 'alpha-ess-label'});
+        box.add_child(this._soc);
         this.add_child(box);
 
         this._rows = {};
@@ -50,7 +66,22 @@ class Indicator extends PanelMenu.Button {
         }
     }
     setRow(k, text) { this._rows[k]?.set_text(text); }
-    setPanel(text, showIcon = true) { this._label.set_text(text); this._icon.visible = showIcon; }
+    setPanel(text, showIcon = true, level = null) {
+        this._label.set_text(text);
+        setLevel(this._label, level);
+        this._icon.visible = showIcon;
+    }
+    setSoc(text, level) {
+        this._soc.set_text(text);
+        this._sep.visible = true;
+        setLevel(this._soc, level);
+        setLevel(this._rows.bat, level);
+    }
+    setLoadLevel(level) { setLevel(this._rows.load, level); }
+    setPvLevel(level) {
+        setLevel(this._icon, level, SUN);
+        setLevel(this._rows.pv, level, SUN);
+    }
 });
 
 export default class AlphaEssExtension extends Extension {
@@ -136,9 +167,16 @@ export default class AlphaEssExtension extends Extension {
             const soc = rt.soc ?? 0, pv = rt.ppv ?? 0, bat = rt.pbat ?? 0, grid = rt.pgrid ?? 0;
             // Night (no solar): drop the icon and show house usage instead of PV output.
             const night = pv <= 0;
-            ind.setPanel(`${((night ? (rt.pload ?? 0) : pv) / 1000).toFixed(1)}kW · ${Math.round(soc)}%`, !night);
+            const load = rt.pload ?? 0;
+            const loadLevel = load / 1000 <= this._cfg.loadLow ? 0 : load / 1000 <= this._cfg.loadHigh ? 1 : 2;
+            // Colour the panel kW only when it shows house load; solar output is never "bad".
+            ind.setPanel(`${((night ? load : pv) / 1000).toFixed(1)}kW`, !night, night ? loadLevel : null);
+            ind.setLoadLevel(loadLevel);
+            const kwPv = pv / 1000;
+            ind.setPvLevel(kwPv >= this._cfg.pvHigh ? 0 : kwPv >= this._cfg.pvLow ? 1 : 2);
+            ind.setSoc(`${Math.round(soc)}%`, soc <= this._cfg.socLow ? 2 : soc < this._cfg.socHigh ? 1 : 0);
             ind.setRow('pv', fmtKw(pv));
-            ind.setRow('load', fmtKw(rt.pload ?? 0));
+            ind.setRow('load', fmtKw(load));
             // Alpha ESS: pbat > 0 discharging, < 0 charging; pgrid > 0 importing.
             ind.setRow('bat', `${Math.round(soc)}%  ${bat > 0 ? '▼ ' + fmtKw(bat) : bat < 0 ? '▲ ' + fmtKw(-bat) : 'idle'}`);
             ind.setRow('grid', grid >= 0 ? `import ${fmtKw(grid)}` : `export ${fmtKw(-grid)}`);
