@@ -9,3 +9,19 @@
 .alpha-ess-sun-weak { color: #9a9996; }
 /* faint pill so neighbouring top-bar items read as separate groups */
 .alpha-ess-chip { background-color: rgba(255, 255, 255, 0.07); border-radius: 8px; padding: 0 8px; margin: 4px 0; }
+/* the theme's own hover/open highlight is a full-height pill on the button; drop it
+   and shade the chip instead so the shape stays the same */
+#panel .panel-button.alpha-ess-button,
+#panel .panel-button.alpha-ess-button:hover,
+#panel .panel-button.alpha-ess-button:focus,
+#panel .panel-button.alpha-ess-button:active,
+#panel .panel-button.alpha-ess-button:checked { box-shadow: none; background-color: transparent; }
+#panel .alpha-ess-button:hover .alpha-ess-chip,
+#panel .alpha-ess-button:focus .alpha-ess-chip { background-color: rgba(255, 255, 255, 0.17); }
+#panel .alpha-ess-button:active .alpha-ess-chip,
+#panel .alpha-ess-button:checked .alpha-ess-chip { background-color: rgba(255, 255, 255, 0.28); }
+#panel .alpha-ess-button:checked:hover .alpha-ess-chip { background-color: rgba(255, 255, 255, 0.32); }
+.alpha-ess-moon { color: #99c1f1; }
+/* buying from the grid: tint the whole chip red so it stands out */
+#panel .alpha-ess-chip.alpha-ess-importing { background-color: rgba(255, 90, 70, 0.22); }
+#panel .alpha-ess-button:hover .alpha-ess-chip.alpha-ess-importing { background-color: rgba(255, 90, 70, 0.34); }
