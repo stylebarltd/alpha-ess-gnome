@@ -2,6 +2,6 @@
   "uuid": "alpha-ess@pola",
   "name": "Alpha ESS Solar",
   "description": "Solar, battery and savings from an Alpha ESS system in the top bar.",
-  "shell-version": ["50"],
+  "shell-version": ["46", "47", "48", "49", "50"],
   "version": 1
 }
