@@ -50,7 +50,7 @@ const batteryIcon = (soc, charging) => {
 
 const Indicator = GObject.registerClass(
 class Indicator extends PanelMenu.Button {
-    _init(path) {
+    _init(path, onRefresh) {
         super._init(0.5, 'Alpha ESS Solar');
         this.add_style_class_name('alpha-ess-button');
         this._gridIcon = new Gio.FileIcon({file: Gio.File.new_for_path(GLib.build_filenamev([path, 'icons', 'grid-power-symbolic.svg']))});
@@ -81,6 +81,8 @@ class Indicator extends PanelMenu.Button {
             this.menu.addMenuItem(item);
             this._rows[k] = val;
         }
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        this.menu.addAction('Refresh now', onRefresh, 'view-refresh-symbolic');
     }
     setRow(k, text) { this._rows[k]?.set_text(text); }
     setPanel(text) {
@@ -125,7 +127,9 @@ export default class AlphaEssExtension extends Extension {
         this._session = new Soup.Session({timeout: 20});
         this._cancel = new Gio.Cancellable();
         this._dayCache = new Map();   // 'YYYY-MM-DD' -> {epv,eInput,eOutput,eload?}
-        this._indicator = new Indicator(this.path);
+        this._busy = false;
+        this._hasData = false;
+        this._indicator = new Indicator(this.path, () => this._refresh());
         Main.panel.addToStatusArea(this.uuid, this._indicator);
         this._loadConfig();
         this._tick();
@@ -196,8 +200,10 @@ export default class AlphaEssExtension extends Extension {
     }
 
     async _refresh() {
-        if (!this._cfg) return;
+        if (!this._cfg || this._busy) return;   // a hung request must not stack up more
+        this._busy = true;
         const ind = this._indicator;
+        ind.setRow('status', 'Refreshing…');
         try {
             const rt = await this._api('getLastPowerData', {});
             const soc = rt.soc ?? 0, pv = rt.ppv ?? 0, bat = rt.pbat ?? 0, grid = rt.pgrid ?? 0;
@@ -232,9 +238,13 @@ export default class AlphaEssExtension extends Extension {
             ind.setRow('saveToday', `${c}${this._saving(day).toFixed(0)}`);
             ind.setRow('saveMonth', `${c}${(await this._monthSaving(day)).toFixed(0)}`);
             ind.setRow('status', new Date().toLocaleTimeString());
+            this._hasData = true;
         } catch (e) {
             if (e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED)) return;
             ind.setRow('status', `Error: ${e.message}`);
+            if (!this._hasData) ind.setPanel('offline');
+        } finally {
+            this._busy = false;
         }
     }
 
