@@ -1,4 +1,6 @@
 .alpha-ess-label { font-weight: bold; }
+/* drawn battery gauge; width must fit "100%" plus the charging bolt at Sans Bold 9 */
+.alpha-ess-battery { width: 56px; height: 18px; margin-left: 6px; }
 .alpha-ess-key { color: #aaa; min-width: 9em; }
 .alpha-ess-val { font-weight: bold; }
 .alpha-ess-good { color: #57e389; }

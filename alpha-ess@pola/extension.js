@@ -3,6 +3,9 @@ import Gio from 'gi://Gio';
 import GObject from 'gi://GObject';
 import St from 'gi://St';
 import Clutter from 'gi://Clutter';
+import Pango from 'gi://Pango';
+import PangoCairo from 'gi://PangoCairo';
+import cairo from 'cairo';
 import Soup from 'gi://Soup';
 
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
@@ -41,12 +44,133 @@ const setClass = (w, cls) => {
     if (cls) w.add_style_class_name(cls);
 };
 
-// battery-level-N[-charging]-symbolic, in steps of 10
-const batteryIcon = (soc, charging) => {
-    const n = Math.min(100, Math.max(0, Math.round(soc / 10) * 10));
-    if (charging) return n === 100 ? 'battery-level-100-charged-symbolic' : `battery-level-${n}-charging-symbolic`;
-    return `battery-level-${n}-symbolic`;
+// same colours as .alpha-ess-good / -warn / -bad in the stylesheet, for Cairo
+const LEVEL_RGB = [[0x57, 0xe3, 0x89], [0xff, 0xa3, 0x48], [0xff, 0x7b, 0x63]];
+
+const roundRect = (cr, x, y, w, h, r) => {
+    r = Math.min(r, w / 2, h / 2);
+    cr.newSubPath();
+    cr.arc(x + w - r, y + r, r, -Math.PI / 2, 0);
+    cr.arc(x + w - r, y + h - r, r, 0, Math.PI / 2);
+    cr.arc(x + r, y + h - r, r, Math.PI / 2, Math.PI);
+    cr.arc(x + r, y + r, r, Math.PI, 3 * Math.PI / 2);
+    cr.closePath();
 };
+
+// Horizontal battery in the top bar, sized by the stylesheet (.alpha-ess-battery): a bold
+// outline with a gap, the body filled to the charge level in the level colour, the
+// percentage in large bold text on top, a bolt on the left while charging. Flow is shown by
+// a faint light sheen that drifts very slowly through the fill: rightwards (towards full)
+// while charging, leftwards while discharging, still when idle.
+const SHEEN_PERIOD_MS = 12000;   // one sweep; slow enough not to catch the eye
+const SHEEN_FRAME_MS = 80;
+const BatteryGauge = GObject.registerClass(
+class BatteryGauge extends St.DrawingArea {
+    _init() {
+        super._init({style_class: 'alpha-ess-battery', y_align: Clutter.ActorAlign.CENTER, visible: false});
+        this._soc = 0;
+        this._level = 0;
+        this._flow = 0;        // 1 charging, -1 discharging, 0 idle
+        this._timer = null;
+        this.connect('repaint', () => this._draw());
+        this.connect('destroy', () => this._stopSheen());
+    }
+
+    set(soc, level, flow) {
+        this._soc = Math.min(100, Math.max(0, soc));
+        this._level = level;
+        this._flow = flow;
+        this.visible = true;
+        if (flow) this._startSheen(); else this._stopSheen();
+        this.queue_repaint();
+    }
+
+    _startSheen() {
+        if (this._timer) return;
+        this._timer = GLib.timeout_add(GLib.PRIORITY_LOW, SHEEN_FRAME_MS, () => {
+            if (this.mapped) this.queue_repaint();
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+
+    _stopSheen() {
+        if (this._timer) GLib.source_remove(this._timer);
+        this._timer = null;
+    }
+
+    _draw() {
+        const cr = this.get_context();
+        const [w, h] = this.get_surface_size();
+        const fg = this.get_theme_node().get_foreground_color();
+        const [r, g, b] = LEVEL_RGB[this._level] ?? LEVEL_RGB[0];
+        const fgRGBA = a => cr.setSourceRGBA(fg.red / 255, fg.green / 255, fg.blue / 255, fg.alpha / 255 * a);
+        const lw = 1.5, nubW = 3, nubH = Math.round(h * 0.45), gap = 1.5;
+        const bw = w - nubW - 1;   // body width; the nub and a hair of air take the rest
+        const radius = 4;
+
+        // outline and nub in the panel's text colour
+        fgRGBA(0.9);
+        cr.setLineWidth(lw);
+        roundRect(cr, lw / 2, lw / 2, bw - lw, h - lw, radius);
+        cr.stroke();
+        roundRect(cr, bw + 1, (h - nubH) / 2, nubW, nubH, 1.5);
+        cr.fill();
+
+        // charge level with a gap inside the outline, translucent so the text stays readable
+        const pad = lw + gap, inner = bw - 2 * pad, innerH = h - 2 * pad;
+        const fill = Math.round(inner * this._soc / 100);
+        if (fill > 0) {
+            cr.setSourceRGBA(r / 255, g / 255, b / 255, 0.6);
+            roundRect(cr, pad, pad, fill, innerH, radius - gap);
+            cr.fill();
+        }
+
+        // slow sheen through the fill while charging / discharging
+        if (this._flow && fill >= 8) {
+            const band = Math.max(10, fill * 0.6);
+            const phase = (GLib.get_monotonic_time() / 1000 % SHEEN_PERIOD_MS) / SHEEN_PERIOD_MS;
+            const travel = fill + band;
+            const x = this._flow > 0 ? pad - band + phase * travel : pad + fill - phase * travel;
+            const grad = new cairo.LinearGradient(x, 0, x + band, 0);
+            grad.addColorStopRGBA(0, 1, 1, 1, 0);
+            grad.addColorStopRGBA(0.5, 1, 1, 1, 0.22);
+            grad.addColorStopRGBA(1, 1, 1, 1, 0);
+            cr.save();
+            roundRect(cr, pad, pad, fill, innerH, radius - gap);
+            cr.clip();
+            cr.setSource(grad);
+            cr.paint();
+            cr.restore();
+        }
+
+        // bolt while charging (shape of icons/grid-power-symbolic.svg, scaled to about 7×11)
+        let textX = pad;
+        let textW = inner;
+        if (this._flow > 0) {
+            const k = Math.min(0.75, (innerH - 2) / 15);
+            const bx = pad + 2, by = (h - 15 * k) / 2;
+            const pts = [[9.5, 0.5], [3, 9], [7.2, 9], [5.8, 15.5], [13, 6.5], [8.6, 6.5]];
+            fgRGBA(1);
+            pts.forEach(([x, y], i) => cr[i ? 'lineTo' : 'moveTo'](bx + (x - 3) * k, by + (y - 0.5) * k));
+            cr.closePath();
+            cr.fill();
+            const used = 10 * k + 3;
+            textX += used;
+            textW -= used;
+        }
+
+        // percentage, centred in what is left of the body
+        const layout = PangoCairo.create_layout(cr);
+        layout.set_font_description(Pango.FontDescription.from_string('Sans Bold 9'));
+        layout.set_text(`${Math.round(this._soc)}%`, -1);
+        const [, log] = layout.get_pixel_extents();
+        fgRGBA(1);
+        cr.moveTo(textX + (textW - log.width) / 2 - log.x, (h - log.height) / 2 - log.y);
+        PangoCairo.show_layout(cr, layout);
+
+        cr.$dispose();
+    }
+});
 
 const Indicator = GObject.registerClass(
 class Indicator extends PanelMenu.Button {
@@ -54,16 +178,14 @@ class Indicator extends PanelMenu.Button {
         super._init(0.5, 'Alpha ESS Solar');
         this.add_style_class_name('alpha-ess-button');
         this._gridIcon = new Gio.FileIcon({file: Gio.File.new_for_path(GLib.build_filenamev([path, 'icons', 'grid-power-symbolic.svg']))});
-        // [what matters most now: grid / sun / moon][kW]  [battery][%]
+        // [what matters most now: grid / sun / moon][kW]  [horizontal battery with % inside]
         this._box = new St.BoxLayout({style_class: 'panel-status-menu-box alpha-ess-chip'});
         this._icon = new St.Icon({icon_name: 'weather-clear-symbolic', style_class: 'system-status-icon'});
         this._box.add_child(this._icon);
         this._label = new St.Label({text: '…', y_align: Clutter.ActorAlign.CENTER, style_class: 'alpha-ess-label'});
         this._box.add_child(this._label);
-        this._batIcon = new St.Icon({style_class: 'system-status-icon', visible: false, style: 'margin-left: 6px;'});
-        this._box.add_child(this._batIcon);
-        this._soc = new St.Label({text: '', y_align: Clutter.ActorAlign.CENTER, style_class: 'alpha-ess-label'});
-        this._box.add_child(this._soc);
+        this._bat = new BatteryGauge();
+        this._box.add_child(this._bat);
         this.add_child(this._box);
 
         this._rows = {};
@@ -109,12 +231,8 @@ class Indicator extends PanelMenu.Button {
         else this._box.remove_style_class_name('alpha-ess-importing');
     }
 
-    setSoc(soc, level, charging) {
-        this._soc.set_text(`${Math.round(soc)}%`);
-        this._batIcon.icon_name = batteryIcon(soc, charging);
-        this._batIcon.visible = true;
-        setLevel(this._batIcon, level);
-        setLevel(this._soc, level);
+    setSoc(soc, level, flow) {
+        this._bat.set(soc, level, flow);
         setLevel(this._rows.bat, level);
     }
     setGridLevel(level) { setLevel(this._rows.grid, level); }
@@ -130,7 +248,7 @@ export default class AlphaEssExtension extends Extension {
         this._busy = false;
         this._hasData = false;
         this._indicator = new Indicator(this.path, () => this._refresh());
-        Main.panel.addToStatusArea(this.uuid, this._indicator);
+        Main.panel.addToStatusArea(this.uuid, this._indicator, -1, 'left'); // left side of the top bar, after Activities
         this._loadConfig();
         this._tick();
     }
@@ -223,8 +341,9 @@ export default class AlphaEssExtension extends Extension {
             ind.setLoadLevel(loadLevel);
             ind.setPvLevel(sunLevel);
             ind.setGridLevel(grid > importMin ? 2 : grid < -importMin ? 0 : null);
-            // battery icon shows level and whether it is charging (pbat < 0)
-            ind.setSoc(soc, soc <= this._cfg.socLow ? 2 : soc < this._cfg.socHigh ? 1 : 0, bat < -flowMin);
+            // battery gauge shows level and flow: pbat < 0 charging, > 0 discharging
+            ind.setSoc(soc, soc <= this._cfg.socLow ? 2 : soc < this._cfg.socHigh ? 1 : 0,
+                bat < -flowMin ? 1 : bat > flowMin ? -1 : 0);
             ind.setRow('pv', fmtKw(pv));
             ind.setRow('load', fmtKw(load));
             // Alpha ESS: pbat > 0 discharging, < 0 charging; pgrid > 0 importing.

@@ -25,3 +25,6 @@ Reload after a change: X11 `Alt+F2`, `r`; Wayland: log out and back in.
 ## Gotchas
 - The config file holds API secrets. Never commit it or paste its values.
 - When the API never answers, the indicator shows offline; keep that path working.
+- The panel battery is a Cairo-drawn `St.DrawingArea` (horizontal, % inside, bolt while
+  charging, a very slow sheen drifting right = charging, left = discharging). Its size comes
+  from `.alpha-ess-battery` in the stylesheet; keep it wide enough for "100%" plus the bolt.
